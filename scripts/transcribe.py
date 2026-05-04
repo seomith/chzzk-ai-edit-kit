@@ -2,10 +2,19 @@
 transcribe.py — vod.mp4 → transcript.json (faster-whisper STT)
 
 사용법:
-    python scripts/transcribe.py 260504
-    python scripts/transcribe.py 260504 --model medium  # 속도 우선
-    python scripts/transcribe.py 260504 --device cpu    # GPU 없을 때
-    python scripts/transcribe.py 260504 --force         # 재실행
+    python scripts/transcribe.py 260504                  # 디바이스/VRAM 자동 분기
+    python scripts/transcribe.py 260504 --model medium   # 모델 명시
+    python scripts/transcribe.py 260504 --device cpu     # 디바이스 명시
+    python scripts/transcribe.py 260504 --force          # 재실행
+
+영상 파일은 _common.resolve_vod_path 가 결정 (source.video 우선, 없으면 vod.mp4).
+
+자동 모델 선택 규칙:
+    GPU + VRAM ≥ 9GB → large-v3
+    GPU + VRAM ≥ 5GB → medium
+    GPU + VRAM <  5GB → small
+    CPU only          → small
+사용자가 --model 로 명시하면 그 값이 항상 우선합니다.
 """
 
 from __future__ import annotations
@@ -16,23 +25,35 @@ import sys
 import time
 from pathlib import Path
 
-
-def folder(yymmdd: str) -> Path:
-    p = Path(yymmdd)
-    if not p.exists():
-        sys.exit(f"[X] 폴더 없음: {p.resolve()}")
-    return p
+from _common import folder, resolve_vod_path
 
 
-def detect_device() -> tuple[str, str]:
-    """사용 가능한 디바이스/연산타입 자동 감지."""
+def detect_device_and_model() -> tuple[str, str, str, str]:
+    """
+    반환: (device, compute_type, recommended_model, info_line)
+    """
     try:
-        import torch  # noqa
+        import torch
         if torch.cuda.is_available():
-            return "cuda", "float16"
+            try:
+                props = torch.cuda.get_device_properties(0)
+                vram_gb = props.total_memory / (1024 ** 3)
+                name = props.name
+            except Exception:
+                vram_gb = 0
+                name = "Unknown CUDA"
+            if vram_gb >= 9:
+                model = "large-v3"
+            elif vram_gb >= 5:
+                model = "medium"
+            else:
+                model = "small"
+            return ("cuda", "float16", model,
+                    f"CUDA 감지: {name}, VRAM {vram_gb:.1f}GB → 권장 모델 {model}")
     except Exception:
         pass
-    return "cpu", "int8"
+    return ("cpu", "int8", "small",
+            "GPU 미감지 → CPU 모드, 권장 모델 small")
 
 
 def transcribe(vod_path: Path, out_path: Path, model_size: str,
@@ -102,8 +123,8 @@ def transcribe(vod_path: Path, out_path: Path, model_size: str,
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("yymmdd")
-    ap.add_argument("--model", default="large-v3",
-                    choices=["tiny", "base", "small", "medium", "large-v2", "large-v3"])
+    ap.add_argument("--model", default="auto",
+                    help="auto(기본), tiny, base, small, medium, large-v2, large-v3")
     ap.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"])
     ap.add_argument("--compute-type", default="auto",
                     help="float16, int8, int8_float16 등 (auto면 자동)")
@@ -112,24 +133,31 @@ def main():
     args = ap.parse_args()
 
     f = folder(args.yymmdd)
-    vod = f / "vod.mp4"
-    if not vod.exists():
-        sys.exit(f"[X] {vod} 없음. 먼저 chzzk_download.py 실행.")
+    vod = resolve_vod_path(f)
 
     out = f / "transcript.json"
     if out.exists() and not args.force:
         print(f"[O] transcript.json 이미 존재 → 건너뜀 (--force 로 재실행)")
         return
 
-    if args.device == "auto":
-        device, compute_type = detect_device()
-    else:
-        device = args.device
-        compute_type = "float16" if device == "cuda" else "int8"
+    auto_device, auto_compute, auto_model, info_line = detect_device_and_model()
+    print(f"[O] {info_line}")
+
+    device = auto_device if args.device == "auto" else args.device
     if args.compute_type != "auto":
         compute_type = args.compute_type
+    else:
+        compute_type = auto_compute if device == auto_device else (
+            "float16" if device == "cuda" else "int8"
+        )
+    model_size = auto_model if args.model == "auto" else args.model
 
-    transcribe(vod, out, args.model, device, compute_type, args.language)
+    if args.model == "auto":
+        print(f"[O] 자동 선택된 모델: {model_size}")
+    else:
+        print(f"[O] 사용자 지정 모델: {model_size}")
+
+    transcribe(vod, out, model_size, device, compute_type, args.language)
 
 
 if __name__ == "__main__":
