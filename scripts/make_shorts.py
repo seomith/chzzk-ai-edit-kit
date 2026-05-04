@@ -24,12 +24,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-
-def folder(yymmdd: str) -> Path:
-    p = Path(yymmdd)
-    if not p.exists():
-        sys.exit(f"[X] 폴더 없음: {p.resolve()}")
-    return p
+from _common import folder
 
 
 def parse_clip_time(name: str) -> tuple[str, str] | None:
@@ -42,10 +37,21 @@ def load_highlights(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def load_transcript(path: Path) -> dict:
-    if not path.exists():
-        return {}
-    return json.loads(path.read_text(encoding="utf-8"))
+def load_transcript_for_subs(work_folder: Path) -> tuple[dict, str]:
+    """자막용 transcript 로드. corrected 가 있으면 우선.
+    corrected segment 의 corrected_text 를 표준 text 로 정규화해서 반환.
+    """
+    corrected = work_folder / "transcript.corrected.json"
+    raw = work_folder / "transcript.json"
+    if corrected.exists():
+        data = json.loads(corrected.read_text(encoding="utf-8"))
+        for seg in data.get("segments", []):
+            if "corrected_text" in seg:
+                seg["text"] = seg["corrected_text"]
+        return data, "transcript.corrected.json"
+    if raw.exists():
+        return json.loads(raw.read_text(encoding="utf-8")), "transcript.json"
+    return {}, ""
 
 
 def make_ass_subs(transcript: dict, start: float, end: float, out_ass: Path) -> bool:
@@ -175,7 +181,12 @@ def main():
     shorts_dir.mkdir(parents=True, exist_ok=True)
 
     hl = load_highlights(f / "highlights.json")
-    transcript = load_transcript(f / "transcript.json") if not args.no_subs else {}
+    if not args.no_subs:
+        transcript, src_name = load_transcript_for_subs(f)
+        if src_name:
+            print(f"[O] 자막 소스: {src_name}")
+    else:
+        transcript = {}
     by_id = {item.get("id"): item for item in hl.get("shorts", [])}
 
     clip_files = sorted(clips_dir.glob("*.mp4"))

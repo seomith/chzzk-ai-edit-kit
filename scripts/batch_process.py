@@ -32,7 +32,8 @@ def is_target(folder: Path, since: str | None) -> bool:
         return False
     if since and folder.name < since:
         return False
-    if not (folder / "source.url").exists():
+    has_input = any((folder / x).exists() for x in ("source.url", "source.video", "vod.mp4"))
+    if not has_input:
         return False
     shorts = folder / "shorts"
     if shorts.exists() and any(shorts.glob("*.mp4")):
@@ -50,9 +51,16 @@ def process_one(yymmdd: str, scripts: Path) -> str:
     """한 폴더 처리. 반환: 'ok' / 'needs_screening' / 'failed'"""
     folder = Path(yymmdd)
 
-    steps = [
-        ("download", ["python", str(scripts / "chzzk_download.py"), yymmdd]),
+    steps: list[tuple[str, list[str]]] = []
+    # 영상 입력이 source.url 인 경우만 다운로드. OBS 녹화본 사용자는 스킵.
+    if (folder / "source.url").exists():
+        steps.append(("download", ["python", str(scripts / "chzzk_download.py"), yymmdd]))
+    else:
+        print(f"[i] {yymmdd}: source.url 없음 → 다운로드 스킵 (vod.mp4 / source.video 가정)")
+
+    steps += [
         ("transcribe", ["python", str(scripts / "transcribe.py"), yymmdd]),
+        ("correct", ["python", str(scripts / "correct_transcript.py"), yymmdd]),
         ("analyze", ["python", str(scripts / "analyze_signals.py"), yymmdd]),
     ]
     for name, cmd in steps:

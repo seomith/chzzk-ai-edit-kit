@@ -7,9 +7,7 @@ cut_clips.py — highlights.json 기반으로 ffmpeg 자동 컷
     python scripts/cut_clips.py 260504 --longform-only # 롱폼만
     python scripts/cut_clips.py 260504 --export-edl    # 다빈치/프리미어용 EDL도 생성
 
-입력:
-    <YYMMDD>/vod.mp4
-    <YYMMDD>/highlights.json
+영상은 _common.resolve_vod_path 가 결정 (source.video 우선, 없으면 vod.mp4).
 
 출력:
     <YYMMDD>/clips/sNN_<title>.mp4   (쇼츠 후보, 16:9 원본 비율)
@@ -26,12 +24,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-
-def folder(yymmdd: str) -> Path:
-    p = Path(yymmdd)
-    if not p.exists():
-        sys.exit(f"[X] 폴더 없음: {p.resolve()}")
-    return p
+from _common import folder, resolve_vod_path
 
 
 def load_highlights(path: Path) -> dict:
@@ -178,7 +171,7 @@ def main():
     args = ap.parse_args()
 
     f = folder(args.yymmdd)
-    vod = f / "vod.mp4"
+    vod = resolve_vod_path(f)
     hl = load_highlights(f / "highlights.json")
 
     if not args.longform_only and not args.skip_shorts:
