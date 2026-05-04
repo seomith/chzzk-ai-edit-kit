@@ -1,18 +1,26 @@
 """
-make_shorts.py — clips/*.mp4 → shorts/*.mp4 (9:16 + 자막 burn-in)
+make_shorts.py — clips/*.mp4 → shorts/*.mp4 (9:16) + 자막 사이드 파일
+
+기본 동작:
+    - 9:16 리프레임
+    - .srt 자막 사이드 파일을 영상 옆에 같이 출력 (--no-keep-subs 로 끄기)
+    - 자막 burn-in 은 OFF (사용자가 --burn-subs 로 명시한 경우에만 박음)
+
+이유:
+    자막 품질이 STT 모델·교정 상태에 따라 들쑥날쑥하므로 기본 burn-in 은 위험.
+    .srt 사이드 파일이면 프리미어/다빈치 import, 유튜브 자막 직접 업로드,
+    필요 시 사용자가 직접 burn-in 하는 등 운용이 자유로움.
 
 사용법:
-    python scripts/make_shorts.py 260504
-    python scripts/make_shorts.py 260504 --no-subs    # 자막 없이
-    python scripts/make_shorts.py 260504 --crop center # 중앙 크롭 (기본)
+    python scripts/make_shorts.py 260504                         # 영상 + .srt
+    python scripts/make_shorts.py 260504 --burn-subs             # 영상에 자막 박기
+    python scripts/make_shorts.py 260504 --no-keep-subs          # .srt 도 안 만듦
+    python scripts/make_shorts.py 260504 --no-subs               # 둘 다 OFF (=영상만)
+    python scripts/make_shorts.py 260504 --crop blur             # 위아래 블러 배경
 
 크롭 모드:
     - center: 중앙 9:16 (기본)
     - blur:   원본 16:9를 위에 두고 위아래에 블러 배경 (캠 위치 무관)
-
-자막:
-    transcript.json에서 클립 시간 범위 텍스트를 추출해 ASS로 burn-in.
-    톤: 큼지막한 흰 글씨 + 검은 외곽선 (예능 스타일)
 """
 
 from __future__ import annotations
@@ -25,10 +33,6 @@ import sys
 from pathlib import Path
 
 from _common import folder
-
-
-def parse_clip_time(name: str) -> tuple[str, str] | None:
-    return None  # 클립 파일에 시간 메타가 없으면 highlights.json에서 매칭
 
 
 def load_highlights(path: Path) -> dict:
@@ -54,9 +58,60 @@ def load_transcript_for_subs(work_folder: Path) -> tuple[dict, str]:
     return {}, ""
 
 
+def _segments_in_range(transcript: dict, start: float, end: float) -> list[dict]:
+    out = []
+    for seg in transcript.get("segments", []):
+        s, e = seg.get("start"), seg.get("end")
+        if s is None or e is None:
+            continue
+        if e < start or s > end:
+            continue
+        out.append(seg)
+    return out
+
+
+def _srt_time(t: float) -> str:
+    """SRT 시간 형식: HH:MM:SS,mmm (콤마)"""
+    t = max(0.0, float(t))
+    h = int(t // 3600)
+    m = int((t % 3600) // 60)
+    s = int(t % 60)
+    ms = int(round((t - int(t)) * 1000))
+    if ms == 1000:
+        s += 1; ms = 0
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+def make_srt(transcript: dict, start: float, end: float, out_srt: Path) -> bool:
+    """클립 구간을 SRT 자막으로 저장. 시간은 클립 기준(0초부터)으로 변환."""
+    segs = _segments_in_range(transcript, start, end)
+    if not segs:
+        return False
+    lines = []
+    idx = 0
+    for seg in segs:
+        s = max(0.0, seg["start"] - start)
+        e = min(end - start, seg["end"] - start)
+        if e <= s:
+            continue
+        text = (seg.get("text") or "").replace("\n", " ").strip()
+        if not text:
+            continue
+        idx += 1
+        lines.append(str(idx))
+        lines.append(f"{_srt_time(s)} --> {_srt_time(e)}")
+        lines.append(text)
+        lines.append("")
+    if idx == 0:
+        return False
+    out_srt.write_text("\n".join(lines), encoding="utf-8")
+    return True
+
+
 def make_ass_subs(transcript: dict, start: float, end: float, out_ass: Path) -> bool:
-    """클립 구간 자막을 ASS로 작성. burn-in용 큰 글씨 스타일."""
-    if not transcript:
+    """클립 구간 자막을 ASS 로 작성. burn-in 용 큰 글씨 스타일."""
+    segs = _segments_in_range(transcript, start, end)
+    if not segs:
         return False
 
     header = """[Script Info]
@@ -81,16 +136,12 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         return f"{h:01d}:{m:02d}:{s:05.2f}"
 
     lines = []
-    for seg in transcript.get("segments", []):
-        if seg["end"] < start or seg["start"] > end:
-            continue
-        # 클립 기준 시간으로 변환
+    for seg in segs:
         s = max(0, seg["start"] - start)
         e = min(end - start, seg["end"] - start)
         text = seg["text"].replace("\n", " ").strip()
         if not text:
             continue
-        # 너무 길면 줄바꿈
         if len(text) > 18:
             mid = len(text) // 2
             sp = text.rfind(" ", 0, mid)
@@ -100,7 +151,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
     if not lines:
         return False
-
     out_ass.write_text(header + "\n".join(lines) + "\n", encoding="utf-8")
     return True
 
@@ -111,7 +161,6 @@ def reframe_to_vertical(in_clip: Path, out_path: Path, ass_path: Path | None,
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     if crop_mode == "blur":
-        # 위아래 블러 배경, 가운데 원본
         vf = (
             "split[main][bg];"
             "[bg]scale=1080:1920:force_original_aspect_ratio=increase,"
@@ -120,11 +169,9 @@ def reframe_to_vertical(in_clip: Path, out_path: Path, ass_path: Path | None,
             "[bg2][fg]overlay=(W-w)/2:(H-h)/2"
         )
     else:
-        # 중앙 크롭 (입력이 16:9라고 가정)
         vf = "crop=ih*9/16:ih,scale=1080:1920"
 
     if ass_path and ass_path.exists():
-        # ASS 경로의 백슬래시·콜론 이스케이프 (윈도우)
         ass_str = str(ass_path).replace("\\", "/").replace(":", r"\:")
         vf += f",ass='{ass_str}'"
 
@@ -147,7 +194,6 @@ def reframe_to_vertical(in_clip: Path, out_path: Path, ass_path: Path | None,
 
 
 def write_meta(item: dict, out_path: Path) -> None:
-    """쇼츠 클립 옆에 메타데이터 텍스트 파일 (제목/태그/설명)."""
     title = item.get("title", "")
     tags = ", ".join(item.get("tags", []))
     reason = item.get("reason", "")
@@ -168,9 +214,17 @@ def write_meta(item: dict, out_path: Path) -> None:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("yymmdd")
-    ap.add_argument("--no-subs", action="store_true")
+    ap.add_argument("--burn-subs", action="store_true",
+                    help="자막을 영상에 박기 (기본 OFF — 자막 품질 검증 후 사용 권장)")
+    ap.add_argument("--no-keep-subs", action="store_true",
+                    help=".srt 사이드 파일도 만들지 않음")
+    ap.add_argument("--no-subs", action="store_true",
+                    help="자막 관련 모든 출력 OFF (= burn 안 함 + .srt 안 만듦)")
     ap.add_argument("--crop", default="center", choices=["center", "blur"])
     args = ap.parse_args()
+
+    keep_srt = not args.no_keep_subs and not args.no_subs
+    burn_in = args.burn_subs and not args.no_subs
 
     f = folder(args.yymmdd)
     clips_dir = f / "clips"
@@ -181,35 +235,41 @@ def main():
     shorts_dir.mkdir(parents=True, exist_ok=True)
 
     hl = load_highlights(f / "highlights.json")
-    if not args.no_subs:
+    transcript: dict = {}
+    if keep_srt or burn_in:
         transcript, src_name = load_transcript_for_subs(f)
         if src_name:
             print(f"[O] 자막 소스: {src_name}")
-    else:
-        transcript = {}
+        else:
+            print("[!] transcript 없음 — 자막 출력 생략")
+            transcript = {}
+
     by_id = {item.get("id"): item for item in hl.get("shorts", [])}
 
     clip_files = sorted(clips_dir.glob("*.mp4"))
     if not clip_files:
         sys.exit(f"[X] 클립 없음: {clips_dir}")
 
-    print(f"[.] {len(clip_files)}개 쇼츠 변환 중 ({args.crop} 모드)")
+    mode_label = []
+    if burn_in: mode_label.append("burn-in")
+    if keep_srt: mode_label.append(".srt")
+    if not mode_label: mode_label.append("자막 없음")
+    print(f"[.] {len(clip_files)}개 쇼츠 변환 중 (crop={args.crop}, 자막={'+'.join(mode_label)})")
 
     for clip in clip_files:
-        # 파일명 첫 토큰이 id (예: s01_제목.mp4)
         m = re.match(r"^([a-z]\d+)_", clip.name)
         clip_id = m.group(1) if m else None
         item = by_id.get(clip_id, {})
 
         out = shorts_dir / clip.name.replace(".mp4", "_shorts.mp4")
-        ass_path = shorts_dir / f"_{clip.stem}.ass" if not args.no_subs else None
+        start = item.get("start", 0)
+        end = item.get("end", 0)
 
-        if ass_path:
-            ok = make_ass_subs(transcript,
-                               item.get("start", 0),
-                               item.get("end", 0),
-                               ass_path)
-            if not ok:
+        # burn-in 용 임시 ASS
+        ass_path: Path | None = None
+        if burn_in and transcript:
+            ass_path = shorts_dir / f"_{clip.stem}.ass"
+            if not make_ass_subs(transcript, start, end, ass_path):
                 ass_path = None
 
         reframe_to_vertical(clip, out, ass_path, crop_mode=args.crop)
@@ -217,10 +277,20 @@ def main():
         if ass_path:
             ass_path.unlink(missing_ok=True)
 
+        # .srt 사이드 파일 (영상과 같은 베이스명)
+        if keep_srt and transcript:
+            srt_path = out.with_suffix(".srt")
+            ok = make_srt(transcript, start, end, srt_path)
+            if ok:
+                print(f"    .srt: {srt_path.name}")
+
         if item:
             write_meta(item, shorts_dir / out.name.replace(".mp4", ".txt"))
 
     print(f"[O] 완료. {shorts_dir}/ 에서 결과 확인 후 NG는 _NG_ 접두사로 표시.")
+    if not burn_in and keep_srt:
+        print("    자막은 .srt 사이드 파일로 동봉됨 — 유튜브 업로드 시 자막 파일로 첨부하거나, ")
+        print("    프리미어/다빈치에 import. 자막을 영상에 박으려면 --burn-subs 로 재실행.")
 
 
 if __name__ == "__main__":
