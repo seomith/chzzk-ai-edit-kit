@@ -1,10 +1,12 @@
 """
-correct_transcript.py — STT 결과 1차 교정
+correct_transcript.py — STT 결과 1차 교정 + 사전 후보 자동 누적
 
 동작:
     1) glossary.json 의 replacements/slang 사전을 단순 치환 적용
     2) 신뢰도 낮은 단어(prob < THRESHOLD) 가 포함된 segment를 needs_review = true 로 마킹
     3) 결과를 transcript.corrected.json 으로 저장 (원본 transcript.json 은 유지)
+    4) glossary.json 에 없는 신뢰도 낮은 단어를 ./glossary.suggested.json 에 누적
+       → 사용자가 가끔 "글로써리 후보 검토해줘" 하면 정식 사전으로 머지 (prompts/glossary_review.md)
 
 이후 AI 어시스턴트(Claude Code/Codex)가 prompts/transcript_correction.md 를 따라
 needs_review = true 인 segment 들의 corrected_text 를 LLM 문맥 보정으로 다듬습니다.
@@ -13,11 +15,12 @@ needs_review = true 인 segment 들의 corrected_text 를 LLM 문맥 보정으�
     python scripts/correct_transcript.py 260504
     python scripts/correct_transcript.py 260504 --threshold 0.55
     python scripts/correct_transcript.py 260504 --force
+    python scripts/correct_transcript.py 260504 --no-suggest  # suggested 누적 생략
 
 glossary.json 위치 검색 순서:
     1) <YYMMDD>/glossary.json        (회차별 오버라이드 — 잘 안 씀)
     2) ./glossary.json                (작업 루트 = 프로젝트 공통)
-    3) 키트의 examples/glossary.example.json  (없으면 빈 사전 사용 안내)
+    3) 없으면 빈 사전으로 동작 (suggested 누적은 그대로 작동)
 """
 
 from __future__ import annotations
@@ -26,11 +29,15 @@ import argparse
 import json
 import re
 import sys
+from datetime import datetime
 from pathlib import Path
 
 from _common import folder
 
 LOW_CONFIDENCE_DEFAULT = 0.6  # word.prob 이 이 값 미만이면 의심
+SUGGEST_MIN_LEN = 2           # 신규 후보 토큰 최소/최대 길이
+SUGGEST_MAX_LEN = 15
+SUGGEST_MAX_CONTEXT = 3       # 후보별 컨텍스트 예시 최대 보관 수
 
 
 def load_glossary(work_folder: Path) -> dict:
@@ -75,12 +82,89 @@ def apply_replacements(text: str, repls: list[tuple[re.Pattern, str]]) -> tuple[
     return text, count
 
 
+def known_words(glossary: dict) -> set[str]:
+    """glossary 의 모든 키/값 + names + do_not_correct 를 모은 set.
+    suggested 누적 시 '이미 사전에 있는 단어'를 제외하기 위함.
+    """
+    out: set[str] = set()
+    def add(v):
+        if isinstance(v, str) and v and not v.startswith("_") and not v.startswith("("):
+            out.add(v.strip())
+
+    for k, v in (glossary.get("replacements") or {}).items():
+        add(k); add(v)
+    for k, v in (glossary.get("slang") or {}).items():
+        add(k); add(v)
+    names = glossary.get("names") or {}
+    add(names.get("self"))
+    for v in names.get("people") or []: add(v)
+    for v in names.get("characters") or []: add(v)
+    for v in glossary.get("do_not_correct") or []: add(v)
+    return out
+
+
+def update_suggestions(suggested_path: Path, low_words: list[dict],
+                       known: set[str], yymmdd: str) -> tuple[int, int]:
+    """STT가 신뢰도 낮게 받아쓴 단어들을 glossary.suggested.json 에 누적.
+    반환: (이번 회차 추가된 신규 키 수, 누적 총 후보 수)
+    """
+    if suggested_path.exists():
+        try:
+            data = json.loads(suggested_path.read_text(encoding="utf-8"))
+        except Exception:
+            data = {}
+    else:
+        data = {}
+    if data.get("version") != 1:
+        data = {"version": 1, "candidates": {}}
+    candidates: dict = data.setdefault("candidates", {})
+    ignored: set[str] = set(
+        x for x in (data.get("ignored") or []) if isinstance(x, str)
+    )
+
+    new_keys = 0
+    for w in low_words:
+        token = (w.get("word") or "").strip()
+        # 정규화: 양옆 공백/특수문자 제거, 한국어 조사 흔적 살짝
+        token = re.sub(r"^[\s\W_]+|[\s\W_]+$", "", token)
+        if not (SUGGEST_MIN_LEN <= len(token) <= SUGGEST_MAX_LEN):
+            continue
+        if token in known or token in ignored:
+            continue
+
+        if token not in candidates:
+            candidates[token] = {
+                "count": 0,
+                "suggested_correction": None,
+                "source": "stt",
+                "first_seen": yymmdd,
+                "last_seen": yymmdd,
+                "context_examples": [],
+            }
+            new_keys += 1
+        c = candidates[token]
+        c["count"] = int(c.get("count", 0)) + 1
+        c["last_seen"] = yymmdd
+        ctx = (w.get("context") or "").strip()
+        if ctx and len(c["context_examples"]) < SUGGEST_MAX_CONTEXT and ctx not in c["context_examples"]:
+            c["context_examples"].append(ctx)
+
+    data["updated_at"] = datetime.now().isoformat(timespec="seconds")
+    suggested_path.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return new_keys, len(candidates)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("yymmdd")
     ap.add_argument("--threshold", type=float, default=LOW_CONFIDENCE_DEFAULT,
                     help=f"신뢰도 임계값 (기본 {LOW_CONFIDENCE_DEFAULT})")
     ap.add_argument("--force", action="store_true")
+    ap.add_argument("--no-suggest", action="store_true",
+                    help="glossary.suggested.json 자동 누적 생략")
     args = ap.parse_args()
 
     f = folder(args.yymmdd)
@@ -103,16 +187,19 @@ def main():
         x for x in (glossary.get("do_not_correct") or [])
         if isinstance(x, str) and not x.startswith("_") and not x.startswith("(")
     )
+    glossary_known = known_words(glossary)
 
     seg_count = 0
     repl_count = 0
     needs_review = 0
     new_segments = []
+    all_low_words: list[dict] = []
     for seg in transcript.get("segments", []):
         seg_count += 1
         original = seg.get("text", "")
         corrected, n = apply_replacements(original, repls)
         repl_count += n
+        seg_text = (seg.get("text") or "").strip()[:200]
 
         # 단어 신뢰도 검사
         low_words = []
@@ -120,12 +207,15 @@ def main():
             if w.get("prob", 1.0) < args.threshold:
                 token = (w.get("word") or "").strip()
                 if token and token not in do_not_correct:
-                    low_words.append({
+                    info = {
                         "word": token,
                         "start": w.get("start"),
                         "end": w.get("end"),
                         "prob": w.get("prob"),
-                    })
+                        "context": seg_text,
+                    }
+                    low_words.append(info)
+                    all_low_words.append(info)
         if low_words:
             needs_review += 1
 
@@ -156,6 +246,17 @@ def main():
     print(f"[O] 사전 치환 적용: {repl_count}건")
     print(f"[O] LLM 보정 필요 segment: {needs_review} / {seg_count}")
     print(f"[O] 저장: {out}")
+
+    # glossary 후보 자동 누적 (작업 루트 = cwd)
+    if not args.no_suggest and all_low_words:
+        suggested_path = Path.cwd() / "glossary.suggested.json"
+        new_keys, total = update_suggestions(
+            suggested_path, all_low_words, glossary_known, args.yymmdd,
+        )
+        print(f"[O] glossary 후보: 신규 {new_keys}개, 누적 {total}개 → {suggested_path.name}")
+        if total >= 10:
+            print(f"    (검토하시려면 AI 에 \"글로써리 후보 검토해줘\")")
+
     if needs_review > 0:
         print(f"\n[다음 단계] AI 어시스턴트에 다음과 같이 요청:")
         print(f"    \"{args.yymmdd} 자막 LLM 보정해줘\"")

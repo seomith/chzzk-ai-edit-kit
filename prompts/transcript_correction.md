@@ -104,4 +104,49 @@ LLM 보정 완료: 145개 segment 검토, 38개 수정.
 검토만 하고 변경 안 한 segment: 107개 (확신 부족)
 
 저장: 260504/transcript.corrected.json
+glossary 후보 추가: 4개 (./glossary.suggested.json, 누적 26개)
 ```
+
+---
+
+## glossary 후보 자동 누적 (LLM 보정에서 발견한 패턴)
+
+보정을 마치고, **같은 (잘못된 단어 → 같은 정정) 패턴이 N회 이상** 반복된 것은
+`./glossary.suggested.json` 에 후보로 적어두세요. 다음 회차부터 사전 치환에서
+미리 잡히면 LLM 보정 부담이 줄어듭니다.
+
+### 작성 규칙
+
+- 위치: 작업 루트의 `glossary.suggested.json` (없으면 새로 생성)
+- 스키마는 `correct_transcript.py` 가 이미 만든 형식 유지:
+
+```json
+{
+  "version": 1,
+  "updated_at": "2026-05-04T15:30:00",
+  "candidates": {
+    "씨오미스": {
+      "count": 12,
+      "suggested_correction": "seomith",
+      "source": "llm",
+      "first_seen": "260504",
+      "last_seen": "260504",
+      "context_examples": ["...오늘은 씨오미스가 1픽...", "...씨오미스 한 판 더..."]
+    }
+  }
+}
+```
+
+### 누적 규칙
+
+- 이미 같은 키가 있으면 `count` 증가, `last_seen` 갱신, `suggested_correction`
+  새 값과 다르면 더 많이 정정한 쪽 유지 (또는 `[A, B]` 배열로 보존)
+- `source` 는 `"llm"` (correct_transcript.py 가 추가한 것은 `"stt"`)
+- 같은 회차 안에서 같은 패턴이 N회 (예: 3회) 이상 반복된 것만 누적
+  → 우연한 1회 정정으로 사전이 오염되지 않게
+- `glossary.json` 의 `replacements`/`names`/`do_not_correct` 에 이미 있는 단어는 제외
+- `context_examples` 는 후보당 최대 3개
+
+### 누적 후 보고
+보고 형식 마지막 줄에 `glossary 후보 추가: N개 (누적 M개)` 한 줄 추가.
+누적 M ≥ 10 이면 한 줄 더: `검토 권장 — "글로써리 후보 검토해줘"`.
