@@ -1,16 +1,28 @@
 """
-chzzk_download.py — 치지직 VOD + 채팅 로그 다운로드
+chzzk_download.py — 치지직 VOD + (선택) 채팅 로그 다운로드
 
 사용법:
-    python scripts/chzzk_download.py 260504             # YYMMDD 폴더의 source.url 사용
+    python scripts/chzzk_download.py 260504             # VOD만 다운로드 (기본)
+    python scripts/chzzk_download.py 260504 --with-chat # VOD + 채팅 로그
+    python scripts/chzzk_download.py 260504 --chat-only # 영상은 이미 있고 채팅만
     python scripts/chzzk_download.py 260504 --info-only # 메타정보만 조회
     python scripts/chzzk_download.py 260504 --force     # 기존 vod.mp4 덮어쓰기
+
+채팅 로그는 기본 OFF입니다. 이유:
+    - 치지직 채팅 다시보기 API가 비공식이라 변경/실패 가능
+    - 대부분 스트리머는 화면에 채팅 위젯을 띄워 시청자에게 시각적으로 노출됨
+    - 분석 신호로는 음량+발화 밀도만으로도 충분 (채팅 신호는 가산점일 뿐)
+도네 리액션·소통 위주·호러 콘텐츠 등 채팅 신호가 핵심인 채널만 --with-chat 권장.
+
+OBS 등 외부 영상 사용 시:
+    이 스크립트를 호출하지 않고, <YYMMDD>/source.video 파일에 영상 절대경로 한 줄
+    또는 <YYMMDD>/vod.mp4 직접 두기. 다음 단계(transcribe.py 등)가 자동 인식.
 
 폴더 구조:
     <YYMMDD>/source.url   ← 입력 (치지직 VOD URL 한 줄)
     <YYMMDD>/vod.mp4      ← 출력
-    <YYMMDD>/chat.json    ← 출력 (가능한 경우)
-    <YYMMDD>/meta.json    ← 출력 (제목/방송시간/길이)
+    <YYMMDD>/chat.json    ← 출력 (--with-chat 일 때만)
+    <YYMMDD>/meta.json    ← 출력
 """
 
 from __future__ import annotations
@@ -25,16 +37,11 @@ from pathlib import Path
 
 import requests
 
+from _common import folder
+
 CHZZK_VIDEO_RE = re.compile(r"chzzk\.naver\.com/video/(\d+)")
 CHZZK_API_BASE = "https://api.chzzk.naver.com"
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-
-
-def folder(yymmdd: str) -> Path:
-    p = Path(yymmdd)
-    if not p.exists():
-        sys.exit(f"[X] 폴더 없음: {p.resolve()}")
-    return p
 
 
 def read_url(yymmdd_folder: Path) -> str:
@@ -174,7 +181,10 @@ def main():
     ap.add_argument("yymmdd", help="작업 폴더 (예: 260504)")
     ap.add_argument("--info-only", action="store_true", help="메타정보만 조회")
     ap.add_argument("--force", action="store_true", help="기존 파일 덮어쓰기")
-    ap.add_argument("--no-chat", action="store_true", help="채팅 다운로드 생략")
+    ap.add_argument("--with-chat", action="store_true",
+                    help="채팅 로그도 함께 다운로드 (기본: OFF)")
+    ap.add_argument("--chat-only", action="store_true",
+                    help="영상 다운로드 생략, 채팅만 (OBS 녹화본 쓸 때 유용)")
     args = ap.parse_args()
 
     f = folder(args.yymmdd)
@@ -191,10 +201,13 @@ def main():
     if args.info_only:
         return
 
-    download_vod(url, f / "vod.mp4", force=args.force)
+    if not args.chat_only:
+        download_vod(url, f / "vod.mp4", force=args.force)
 
-    if not args.no_chat:
+    if args.with_chat or args.chat_only:
         fetch_chat_log(video_id, duration, f / "chat.json", force=args.force)
+    else:
+        print("[i] 채팅 로그 생략 (활성화하려면 --with-chat)")
 
 
 if __name__ == "__main__":

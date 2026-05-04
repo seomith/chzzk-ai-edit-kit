@@ -37,6 +37,8 @@ from collections import defaultdict
 
 import numpy as np
 
+from _common import folder, resolve_vod_path
+
 WINDOW_SEC = 10        # 10초 윈도우로 카운트
 PEAK_RATIO = 2.5       # 평균 대비 N배 이상이면 피크
 MIN_CLIP = 25          # 후보 최소 길이(초)
@@ -46,13 +48,6 @@ PAD_AFTER = 5
 
 LAUGH_PAT = re.compile(r"ㅋ{2,}|ㅎ{2,}|ㅋㅋ|kekw|lul|lmao", re.IGNORECASE)
 EMOTE_PAT = re.compile(r"[\U0001F600-\U0001F64F\U0001F900-\U0001F9FF]")
-
-
-def folder(yymmdd: str) -> Path:
-    p = Path(yymmdd)
-    if not p.exists():
-        sys.exit(f"[X] 폴더 없음: {p.resolve()}")
-    return p
 
 
 def get_duration_seconds(vod: Path) -> float:
@@ -182,9 +177,7 @@ def main():
     args = ap.parse_args()
 
     f = folder(args.yymmdd)
-    vod = f / "vod.mp4"
-    if not vod.exists():
-        sys.exit(f"[X] {vod} 없음. chzzk_download.py 먼저 실행.")
+    vod = resolve_vod_path(f)
 
     out = f / "signals.json"
     if out.exists() and not args.force:
@@ -209,13 +202,16 @@ def main():
     laugh_n = norm(laugh)
     word_n = norm(word_density)
 
-    # 가중 합산 점수
-    composite = (
-        rms_n * 1.0 +
-        chat_n * 1.5 +
-        laugh_n * 2.0 +
-        word_n * 0.5
-    )
+    # 채팅 유무에 따라 가중치 자동 재배분.
+    # 채팅이 있을 때 chat·laugh 합 = 3.5. 없으면 그 자리를 rms·word에 분배.
+    has_chat = chat_count.sum() > 0
+    if has_chat:
+        composite = rms_n * 1.0 + chat_n * 1.5 + laugh_n * 2.0 + word_n * 0.5
+        weight_note = "with_chat (rms 1.0, chat 1.5, laugh 2.0, word 0.5)"
+    else:
+        composite = rms_n * 2.5 + word_n * 2.5
+        weight_note = "no_chat (rms 2.5, word 2.5; chat·laugh 0)"
+    print(f"[O] 가중치: {weight_note}")
 
     peaks = find_peaks(composite, threshold=PEAK_RATIO)
     print(f"[O] {len(peaks)}개 피크 감지")
@@ -256,6 +252,8 @@ def main():
             "peak_ratio": PEAK_RATIO,
             "min_clip": MIN_CLIP,
             "max_clip": MAX_CLIP,
+            "weights": weight_note,
+            "has_chat": bool(has_chat),
         },
         "candidates": [
             {"start": s, "end": e, **info}
