@@ -28,13 +28,16 @@ AI(=당신)가 1차 스크리닝 → 자동 컷 → 쇼츠/롱폼 영상으로 �
 ```
 <프로젝트 루트>/
 ├── AGENTS.md                  ← 이 파일
+├── glossary.json              ← (선택) 채널 사전 — 사전 치환 + LLM 교정 컨텍스트
 ├── 키트경로 참조
 │   └── (스크립트는 ../스트리머_편집키트/scripts/ 또는 동일 폴더)
 └── YYMMDD/                    ← 방송 한 회차당 폴더 하나
-    ├── source.url             ← 치지직 VOD URL (한 줄)
-    ├── vod.mp4                ← 다운로드 결과
-    ├── chat.json              ← 채팅 로그
+    ├── source.url             ← 치지직 VOD URL (치지직 사용자만)
+    ├── source.video           ← 외부 영상 절대경로 한 줄 (OBS 녹화본 등)
+    ├── vod.mp4                ← 영상 (다운로드 결과 또는 직접 복사)
+    ├── chat.json              ← 채팅 로그 (--with-chat 일 때만)
     ├── transcript.json        ← STT (단어 단위 타임스탬프)
+    ├── transcript.corrected.json  ← 사전 치환 + LLM 보정본 ★ 자막용 우선
     ├── signals.json           ← 자동 신호 분석 결과
     ├── highlights.json        ← AI 스크리닝 결과 ★
     ├── clips/*.mp4            ← 자동 컷 결과 (16:9)
@@ -44,26 +47,49 @@ AI(=당신)가 1차 스크리닝 → 자동 컷 → 쇼츠/롱폼 영상으로 �
 
 날짜 형식: **YYMMDD** (예: 260504 = 2026년 5월 4일).
 
+### 1-1. 영상 입력 방식 (둘 중 하나)
+
+| 케이스 | 무엇을 둘까 | 동작 |
+|---|---|---|
+| 치지직 VOD 받기 | `source.url` (URL 한 줄) | `chzzk_download.py` 가 `vod.mp4` 생성 |
+| OBS 등 외부 녹화본 사용 | `source.video` (영상 절대경로 한 줄) **또는** `vod.mp4` 직접 복사 | 다운로드 단계 자동 스킵 |
+
+`_common.resolve_vod_path()` 가 `source.video → vod.mp4` 순으로 해석합니다.
+**자동 감지 안 함** — 사용자/AI 가 어느 영상을 쓸지 명시적으로 알려주세요.
+
+### 1-2. 채팅 로그는 옵션
+
+기본은 채팅 다운로드 OFF. 다음 경우만 권장:
+- 도네 리액션·시청자 소통 위주
+- 호러·깜짝 콘텐츠 (시청자 반응이 중요한 신호)
+
+활성화: `chzzk_download.py --with-chat` 또는 사용자가 "채팅도 받아줘" 라고 말함.
+채팅 없으면 `analyze_signals.py` 가 음량·발화 가중치를 자동으로 상향 조정합니다.
+
 ---
 
 ## 2. 사용자 요청 패턴 → 실행 절차
 
 ### 2-1. "YYMMDD 방송 처리해줘" / "오늘/어제 방송 처리해줘"
 
-**전체 파이프라인 실행** (1~6단계).
+**전체 파이프라인 실행**.
 
 ```
-1. python scripts/chzzk_download.py <YYMMDD>
-2. python scripts/transcribe.py <YYMMDD>
-3. python scripts/analyze_signals.py <YYMMDD>
-4. AI 스크리닝 (아래 §3 참조) → highlights.json 생성
-5. python scripts/cut_clips.py <YYMMDD>
-6. python scripts/make_shorts.py <YYMMDD>
+1.  python scripts/chzzk_download.py <YYMMDD>     # source.url 있을 때만
+2.  python scripts/transcribe.py <YYMMDD>          # 모델 자동 선택 (§A)
+2.5 python scripts/correct_transcript.py <YYMMDD>  # 사전 치환 + 신뢰도 마킹
+2.6 (선택) AI 자막 LLM 보정 — prompts/transcript_correction.md 사용
+3.  python scripts/analyze_signals.py <YYMMDD>
+4.  AI 스크리닝 (§3 참조) → highlights.json 생성
+5.  python scripts/cut_clips.py <YYMMDD>
+6.  python scripts/make_shorts.py <YYMMDD>
 ```
 
 **각 단계마다**
 - 시작 전: "이제 N단계 시작합니다. 예상 소요시간 약 X분."
 - 끝난 후: 산출물 요약 (파일 개수, 크기, 특이사항)
+- 2.5 후: `transcript.corrected.json` 의 `segments_needing_llm_review` 수치를 보고
+  많지 않으면(예: < 50) 2.6 LLM 보정을 자동 진행, 많으면 사용자에게 진행 여부 확인
 - 4단계 후: 후보 개수와 상위 3개 제목을 출력하고 "이대로 진행할까요?" 1회 확인
 
 ### 2-2. "치지직 URL `https://...` 처리해줘"
@@ -89,6 +115,21 @@ URL에서 날짜를 추정해 폴더 생성 → `source.url` 작성 → §2-1 �
 
 - `highlights.json`에서 해당 클립 항목의 `start` 수정
 - 해당 클립만 재컷 (전체 재실행 X)
+
+### 2-7. "YYMMDD 자막 LLM 보정해줘" / "오타 교정해줘"
+
+`transcript.corrected.json` 의 `needs_review = true` 이고 `llm_reviewed = false`
+인 segment 만 보정. 자세한 절차·금지사항은 `prompts/transcript_correction.md`.
+
+- 사전 치환만 자동 (`correct_transcript.py`), LLM 보정은 본 패턴이나 §2-1 의 2.6 단계에서만
+- 보정 후 변경된 항목만 표 형식으로 사용자에게 보고
+- 원본 `text_original` 절대 수정 X
+
+### 2-8. "이 영상 써줘 D:\OBS\xxx.mp4" / "OBS 녹화본으로 처리"
+
+- `<YYMMDD>/source.video` 에 절대경로 한 줄 기록
+- 또는 사용자가 직접 `vod.mp4` 로 복사한 경우 그대로 사용
+- §2-1 의 1번 다운로드 단계는 자동 스킵 (`source.url` 없으면)
 
 ---
 
@@ -203,15 +244,27 @@ python scripts/transcribe.py 260504 --force
 ## 7. 자주 사용하는 명령
 
 ```bash
-# 단일 폴더 풀 파이프라인
+# 단일 폴더 풀 파이프라인 (치지직)
 python scripts/chzzk_download.py 260504 \
   && python scripts/transcribe.py 260504 \
+  && python scripts/correct_transcript.py 260504 \
+  && python scripts/analyze_signals.py 260504 \
+  && python scripts/cut_clips.py 260504 \
+  && python scripts/make_shorts.py 260504
+
+# OBS 녹화본 사용 (다운로드 단계 없음)
+# 사전: 260504/source.video 에 영상 절대경로 한 줄
+python scripts/transcribe.py 260504 \
+  && python scripts/correct_transcript.py 260504 \
   && python scripts/analyze_signals.py 260504 \
   && python scripts/cut_clips.py 260504 \
   && python scripts/make_shorts.py 260504
 
 # 미처리 폴더 일괄
 python scripts/batch_process.py --skip-existing
+
+# 채팅도 받기 (도네 리액션 채널 등)
+python scripts/chzzk_download.py 260504 --with-chat
 
 # VOD 메타정보만 조회
 python scripts/chzzk_download.py 260504 --info-only
@@ -225,3 +278,30 @@ python scripts/chzzk_download.py 260504 --info-only
 - **시간 표기**: `1:23:45` 형식 (HH:MM:SS)
 - **파일 경로**: 폴더 기준 상대 경로 (`260504/shorts/01_*.mp4`)
 - 마지막에 다음 액션 1줄 ("탐색기에서 `260504/shorts/` 확인 후 NG 표시 부탁드립니다.")
+
+---
+
+## A. 부록 — STT 모델·디바이스 자동 분기
+
+`transcribe.py` 는 사용자가 `--model`/`--device` 를 명시하지 않으면 다음 규칙으로 자동 선택:
+
+| 환경 | 자동 선택 모델 | 비고 |
+|---|---|---|
+| GPU + VRAM ≥ 9GB | `large-v3` | 5080/4090/3090 등 |
+| GPU + VRAM ≥ 5GB | `medium` | 4060/3060 8GB 등 |
+| GPU + VRAM <  5GB | `small` | 저사양 GPU |
+| CPU only | `small` | 한국어 실용 최소선 |
+
+사용자가 명시한 `--model` 은 항상 자동 선택보다 우선합니다.
+
+CPU 사용자에게 `large-v3` 강요는 비현실적(10시간 방송 → 10~20시간). `small` 도 의미
+파악·하이라이트 스크리닝에는 충분하지만, 자막 burn-in 품질을 끌어올리려면
+`correct_transcript.py` 의 사전 치환 + LLM 보정 단계로 보완하세요.
+
+## B. 부록 — 자막 LLM 보정 트리거 조건 (자동 모드)
+
+§2-1 의 2.6 단계는 다음 조건에서 자동 진행 권장:
+- `transcript.corrected.json` 의 `segments_needing_llm_review` < 50
+
+50 이상이면 사용자에게 1회 확인 후 진행 (토큰·시간 소비가 커짐).
+사용자가 "오타 교정 자동으로 다 돌려줘" 라고 명시하면 임계값 무시.

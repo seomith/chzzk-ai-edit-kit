@@ -69,9 +69,11 @@ install.bat
 
 ```
 내방송/
-├── AGENTS.md          ← 이 키트의 AGENTS.md를 복사 (Codex/Claude Code 공용)
-└── 260504/            ← 오늘 날짜 (YYMMDD)
-    └── source.url     ← 치지직 VOD URL 한 줄
+├── AGENTS.md           ← 이 키트의 AGENTS.md를 복사 (Codex/Claude Code 공용)
+├── glossary.json       ← (선택) examples/glossary.example.json 복사 후 본인 닉/게임 채우기
+└── 260504/             ← 오늘 날짜 (YYMMDD)
+    ├── source.url      ← 치지직 사용자: VOD URL 한 줄
+    └── source.video    ← OBS 사용자: 영상 절대경로 한 줄 (둘 중 하나만 두면 됨)
 ```
 
 > Claude Code 환경에서 `CLAUDE.md`만 인식하는 경우: 같은 파일을 `CLAUDE.md`로 복사해도 됩니다.
@@ -79,6 +81,11 @@ install.bat
 `source.url` 예:
 ```
 https://chzzk.naver.com/video/12345678
+```
+
+`source.video` 예 (OBS 녹화본 경로):
+```
+D:\OBS\녹화\260504_방송.mp4
 ```
 
 ### Step 2. AI 어시스턴트로 폴더 열기
@@ -93,12 +100,13 @@ Claude Code/Codex 데스크톱에서 `내방송/` 폴더를 프로젝트로 추�
 
 AI가 다음을 순서대로 실행하고, 중간중간 확인을 요청합니다:
 
-1. VOD + 채팅 다운로드 (5~30분, 방송 길이에 따라)
-2. STT 자막화 (GPU 30분 / CPU 수 시간)
-3. 채팅·음량 신호 분석 (1분)
-4. **하이라이트 후보 제시** ← 여기서 첫 검수
-5. 자동 컷 + 쇼츠 변환 (10~30분)
-6. **`shorts/`, `longform/` 폴더에서 결과 확인** ← 마지막 검수
+1. VOD 다운로드 (치지직 케이스만, 5~30분 / OBS 사용자는 스킵)
+2. STT 자막화 (모델 자동 선택 — RTX 5080급 GPU = 30분~1시간 / CPU + small = 1~2시간)
+3. 사전 치환 + 신뢰도 마킹 (1분 이내) → 필요 시 LLM 보정
+4. 신호 분석 (1분, 채팅 없으면 가중치 자동 재배분)
+5. **하이라이트 후보 제시** ← 여기서 첫 검수
+6. 자동 컷 + 쇼츠 변환 (10~30분)
+7. **`shorts/`, `longform/` 폴더에서 결과 확인** ← 마지막 검수
 
 ### Step 4. 검수 → 업로드
 
@@ -139,7 +147,9 @@ final 안 만든 폴더 다 처리해줘
 | `python: command not found` | Python 3.10+ 설치 |
 | `ffmpeg: command not found` | `winget install ffmpeg` |
 | 치지직 다운로드 실패 | `pip install -U yt-dlp` |
-| STT가 너무 느림 | NVIDIA GPU + CUDA 설치, 또는 모델을 `medium`으로 |
+| STT가 너무 느림 | `transcribe.py`가 디바이스/VRAM 자동 감지 — `--model small` 명시도 가능 |
+| 자막에 인명·신조어 오타 | `glossary.json`에 단어 추가 → "260504 자막 LLM 보정해줘" |
+| OBS 녹화본 쓰고 싶음 | `<YYMMDD>/source.video`에 영상 절대경로 한 줄 |
 | AI가 엉뚱한 구간 뽑음 | `prompts/highlight_screening.md` 본인 채널 톤에 맞게 수정 |
 
 자세한 내용은 [`스트리머_AI편집_가이드.md`](스트리머_AI편집_가이드.md) §8 트러블슈팅.

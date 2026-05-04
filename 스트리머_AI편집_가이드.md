@@ -30,52 +30,63 @@
 │                      AI 보조 편집 파이프라인                 │
 └─────────────────────────────────────────────────────────────┘
 
-[치지직 VOD URL]
+[치지직 VOD URL  또는  OBS 녹화본 .mp4]
      │
      ▼
 ┌──────────────────┐
-│ 1. 다운로드      │  yt-dlp + 채팅 로그 API
-│   chzzk_download │  → vod.mp4, chat.json
+│ 1. 다운로드      │  yt-dlp (치지직 케이스만, 채팅은 옵션)
+│   chzzk_download │  → vod.mp4 (+ chat.json은 --with-chat 시)
+└──────────────────┘
+     │  (OBS 케이스는 1번 스킵, source.video 또는 vod.mp4 사용)
+     ▼
+┌──────────────────┐
+│ 2. STT (자막화)  │  faster-whisper, 모델 자동 선택
+│   transcribe     │  GPU+VRAM 분기 (5080 → large-v3 / CPU → small)
+│                  │  → transcript.json
 └──────────────────┘
      │
      ▼
 ┌──────────────────┐
-│ 2. STT (자막화)  │  faster-whisper (large-v3, 한국어)
-│   transcribe     │  → transcript.json (단어 단위 타임스탬프)
+│ 2.5 사전 치환    │  glossary.json 기반 (인명·신조어·게임 용어)
+│   correct_       │  + 신뢰도 낮은 단어 자동 마킹
+│   transcript     │  → transcript.corrected.json
 └──────────────────┘
      │
      ▼
+┌──────────────────────────────────────────────┐
+│ 2.6 LLM 문맥 보정 (선택)                     │
+│   AI 어시스턴트 — prompts/transcript_         │
+│   correction.md 따라 needs_review 만 다듬기   │
+└──────────────────────────────────────────────┘
+     │
+     ▼
 ┌──────────────────┐
-│ 3. 신호 분석     │  채팅 밀도 / ㅋㅋㅋ 폭발 / 음량 피크 / 키워드
-│   analyze_signals│  → signals.json (후보 타임스탬프 + 점수)
+│ 3. 신호 분석     │  음량·발화 + (선택) 채팅. 가중치 자동 재배분
+│   analyze_signals│  → signals.json
 └──────────────────┘
      │
      ▼
 ┌──────────────────────────────────────────────┐
 │ 4. AI 하이라이트 스크리닝 (Claude Code/Codex)│
-│    - transcript.json + signals.json 읽고     │
-│    - "왜 재밌는지" 판단해 클립 경계 정리     │
-│    - 쇼츠/롱폼 후보 분류                     │
-│    → highlights.json                         │
-│      [{start, end, type, title, reason}, …] │
+│    transcript.corrected + signals + chat 읽고│
+│    쇼츠/롱폼 후보 분류 → highlights.json     │
 └──────────────────────────────────────────────┘
      │
      ▼
 ┌──────────────────┐
-│ 5. 자동 컷       │  ffmpeg + auto-editor (침묵 제거)
-│   cut_clips      │  → clips/*.mp4
+│ 5. 자동 컷       │  ffmpeg → clips/*.mp4
+│   cut_clips      │  EDL 내보내기 옵션 있음
 └──────────────────┘
      │
      ▼
 ┌──────────────────┐
 │ 6. 쇼츠 변환     │  9:16 리프레임 + 자막 burn-in
-│   make_shorts    │  → shorts/*.mp4
+│   make_shorts    │  → shorts/*.mp4 (+ 메타데이터 .txt)
 └──────────────────┘
      │
      ▼
 ┌──────────────────┐
 │ 7. 사람 검수     │  탐색기에서 mp4 직접 재생 → OK/NG
-│                  │  → 유튜브 업로드
 └──────────────────┘
 ```
 
@@ -92,8 +103,18 @@
 | **Claude Code** *또는* **Codex 데스크톱** | AI 반자동화 진행 | claude.ai/code / openai.com |
 | **GPU (선택)** | Whisper 가속 | NVIDIA + CUDA 12 권장 |
 
-> GPU가 없으면 STT가 느려집니다 (10시간 방송 → CPU 5~8시간 / GPU 30분~1시간).
-> CPU만 있으면 `faster-whisper` 모델을 `medium`으로 낮추거나, OpenAI Whisper API(유료)를 쓰는 것도 방법.
+#### STT 모델 × 디바이스 시간표 (10시간 방송 기준)
+
+| 모델 | CPU(int8) | GPU(float16) | 한국어 품질 |
+|---|---|---|---|
+| `tiny` | 12~20분 | 5분 | △ (게임 용어/인명 X) |
+| `base` | 24~40분 | 8분 | △ (스트리머 신조어 약함) |
+| `small` | 1~2시간 | 15분 | ○ (실용 최소선) |
+| `medium` | 3~7시간 | 30~40분 | ◎ (권장) |
+| `large-v3` | 10~20시간 | 30분~1시간 | ◎+ |
+
+키트의 `transcribe.py` 는 디바이스/VRAM 자동 감지로 모델을 자동 선택합니다 (부록 A 참조).
+사용자가 `--model` 로 명시하면 그 값이 우선.
 
 ### 2-2. 키트 설치
 
@@ -135,26 +156,25 @@ Codex와 Claude Code 모두 같은 파일을 읽습니다.
 
 ```
 내방송/
-├── AGENTS.md                  ← 키트에서 복사 (워크플로우 정의)
-├── 260504/                    ← 2026년 5월 4일 방송
-│   ├── source.url             ← 치지직 VOD URL 한 줄
-│   ├── vod.mp4                ← 다운로드 결과
-│   ├── chat.json              ← 채팅 로그
-│   ├── transcript.json        ← STT 결과
-│   ├── signals.json           ← 자동 신호 분석
-│   ├── highlights.json        ← AI 스크리닝 결과 ★ 검수 핵심
-│   ├── clips/
-│   │   ├── 01_웃긴썰.mp4
-│   │   ├── 02_치트키.mp4
-│   │   └── …
-│   ├── shorts/
-│   │   ├── 01_웃긴썰_shorts.mp4
-│   │   └── …
-│   └── longform/
-│       └── highlight_full.mp4
+├── AGENTS.md                       ← 키트에서 복사 (워크플로우 정의)
+├── glossary.json                   ← (선택) 채널 사전, 키트 examples/에 템플릿
+├── 260504/                         ← 2026년 5월 4일 방송
+│   ├── source.url                  ← 치지직 사용자
+│   ├── source.video                ← OBS 사용자 (영상 절대경로 한 줄)
+│   ├── vod.mp4                     ← 영상 (다운 결과 또는 직접 복사)
+│   ├── chat.json                   ← --with-chat 일 때만
+│   ├── transcript.json             ← STT 원본
+│   ├── transcript.corrected.json   ← 사전 치환 + LLM 보정본 ★
+│   ├── signals.json
+│   ├── highlights.json             ← AI 스크리닝 결과 ★ 검수 핵심
+│   ├── clips/                      ← 16:9 자동 컷
+│   ├── shorts/                     ← 9:16 + 자막 burn-in + .txt 메타
+│   └── longform/                   ← 하이라이트 모음
 └── 260505/
     └── …
 ```
+
+> `source.url` 과 `source.video` 는 둘 중 하나만 있으면 됩니다 (둘 다 있어도 source.video 우선).
 
 ---
 
@@ -165,24 +185,38 @@ Codex와 Claude Code 모두 같은 파일을 읽습니다.
 방송 끝나고:
 
 1. `내방송/260504/` 폴더 만들기
-2. `source.url` 파일에 VOD URL 한 줄 붙여넣기
-3. AI 어시스턴트에서 그 폴더 열고 다음 한 줄:
+2. **치지직 사용자**: `source.url` 파일에 VOD URL 한 줄 붙여넣기
+   **OBS 사용자**: `source.video` 파일에 영상 절대경로 한 줄 (또는 `vod.mp4` 직접 복사)
+3. AI 어시스턴트에서 폴더 열고 다음 한 줄:
 
    > **"260504 방송 처리해줘"**
 
-4. AI가 단계별로 진행하면서 중간중간 확인 요청 → 답만 해주면 됨
+4. AI가 단계별로 진행 — 자막 교정 단계에서 한 번, 하이라이트 후보 검수에서 한 번 확인 요청
 5. 끝나면 `shorts/`, `longform/` 폴더에서 mp4 직접 확인 → 업로드
 
-### 4-2. 단계별 수동 실행 (디버깅·커스터마이징용)
+### 4-2. 채널 사전(glossary.json) 채우기 (한 번만)
+
+본인 채널의 닉네임·게임 용어·신조어를 사전에 등록하면 자막 정확도가 크게 올라갑니다.
+키트의 `examples/glossary.example.json` 을 작업 루트(`내방송/glossary.json`)로 복사 후
+빈 칸 채우세요. 모든 회차에 자동 적용됩니다.
+
+### 4-3. 단계별 수동 실행 (디버깅·커스터마이징용)
 
 ```bash
-# 1. VOD + 채팅 다운로드
-python scripts/chzzk_download.py 260504
+# 1. VOD 다운로드 (치지직 사용자만, 채팅은 옵션)
+python scripts/chzzk_download.py 260504              # 영상만
+python scripts/chzzk_download.py 260504 --with-chat  # 영상 + 채팅
 
-# 2. STT
+# 2. STT (모델 자동 선택)
 python scripts/transcribe.py 260504
 
-# 3. 신호 분석
+# 2.5. 사전 치환 + 신뢰도 마킹
+python scripts/correct_transcript.py 260504
+
+# 2.6. (선택) AI 어시스턴트에 "260504 자막 LLM 보정해줘"
+#      → prompts/transcript_correction.md 따라 진행
+
+# 3. 신호 분석 (채팅 없으면 가중치 자동 재배분)
 python scripts/analyze_signals.py 260504
 
 # 4. AI 하이라이트 스크리닝
@@ -192,7 +226,7 @@ python scripts/analyze_signals.py 260504
 # 5. 자동 컷
 python scripts/cut_clips.py 260504
 
-# 6. 쇼츠 변환
+# 6. 쇼츠 변환 (transcript.corrected.json 자동 우선 사용)
 python scripts/make_shorts.py 260504
 ```
 
@@ -206,6 +240,9 @@ python scripts/make_shorts.py 260504
 |---|---|
 | "260504 방송 처리해줘" | 1~6번 전체 파이프라인 |
 | "치지직 URL `xxx` 처리해줘" | 폴더 자동 생성 후 풀 파이프라인 |
+| "OBS 녹화본 `D:\xxx.mp4` 로 260504 처리해줘" | source.video 작성 후 다운 단계 스킵 |
+| "260504 채팅도 받아서 처리해줘" | `--with-chat` 로 채팅까지 |
+| "260504 자막 LLM 보정해줘" | 2.6단계만 (transcript.corrected.json 다듬기) |
 | "260504 하이라이트만 다시 뽑아줘" | 4번 (스크리닝)만 재실행 |
 | "260504 쇼츠 5개만 더 만들어줘" | highlights.json 보고 추가 후보 추출 |
 | "260504 자막 톤을 더 예능스럽게 바꿔줘" | 자막 스타일 프롬프트 변경 |
@@ -254,8 +291,9 @@ python scripts/make_shorts.py 260504
 ## 8. 트러블슈팅
 
 ### Q. STT가 너무 느려요
-- GPU(NVIDIA) 있으면 `transcribe.py` 안에서 `device="cuda"` 확인
-- 모델을 `large-v3` → `medium`으로 낮추면 속도 2~3배
+- GPU(NVIDIA) 있으면 `transcribe.py` 가 자동 감지해서 cuda 사용
+- 자동 모델 분기로 환경별 최적값 자동 선택 (부록 표 참고)
+- 명시적으로 모델 낮추기: `python scripts/transcribe.py 260504 --model small`
 - 정 안되면 OpenAI Whisper API(유료, 분당 약 0.006달러)
 
 ### Q. 치지직 VOD가 다운로드가 안돼요
