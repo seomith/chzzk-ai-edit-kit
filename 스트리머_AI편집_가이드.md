@@ -25,6 +25,7 @@
 > - 정지 0회 — 첫 명령부터 끝까지 자동
 > - 쇼츠는 점수 상위 5개만 mp4 / 롱폼은 1개 합본 / `summary.md` 에 모든 목록
 > - 검수 필요 구간(욕설·BGM)은 mp4 안 만들고 summary.md 에 표시만
+> - **자막은 `.srt` 사이드 파일로 동봉** (영상에 박지 않음 — `--burn-subs` 로만 박음)
 
 ---
 
@@ -244,7 +245,10 @@ python scripts/analyze_signals.py 260504
 python scripts/cut_clips.py 260504
 
 # 6. 쇼츠 변환 (transcript.corrected.json 자동 우선 사용)
+#    기본: 9:16 mp4 + 같은 이름의 .srt 사이드 파일 (자막은 영상에 박지 않음)
 python scripts/make_shorts.py 260504
+python scripts/make_shorts.py 260504 --burn-subs    # 자막을 영상에 박을 때
+python scripts/make_shorts.py 260504 --no-keep-subs # .srt 도 안 만들 때
 ```
 
 ---

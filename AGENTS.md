@@ -107,6 +107,13 @@ AI(=당신)가 1차 스크리닝 → 자동 컷 → 쇼츠/롱폼 영상으로 �
 - 컷되지 않은 쇼츠 후보 / 모든 챕터 / `warnings` 는 `<YYMMDD>/summary.md` 에 목록만
 - 사용자가 "쇼츠 10개 만들어줘" 같이 명시하면 그 값으로 `--shorts-limit` 갱신
 
+**자막 출력 정책 (6단계)**
+- 기본: `.srt` 사이드 파일을 영상 옆에 같이 떨어뜨림 (`s01_*.mp4` + `s01_*.srt`)
+- **burn-in (영상에 자막 박기) 은 기본 OFF**. 사용자가 "자막 박아줘"/`--burn-subs`
+  같이 명시한 경우에만 `make_shorts.py --burn-subs` 로 진행
+- 이유: STT 모델·교정 상태에 따라 자막 품질이 들쑥날쑥하므로 사이드 파일이 안전.
+  유튜브 자막 업로드, 프리미어/다빈치 import 모두 .srt 한 파일로 처리 가능
+
 ### 2-2. "치지직 URL `https://...` 처리해줘"
 
 URL에서 날짜를 추정해 폴더 생성 → `source.url` 작성 → §2-1 실행.
@@ -380,12 +387,22 @@ python scripts/cut_clips.py 260504 --shorts-limit 0   # 제한 없음
 
 | 환경 | 자동 선택 모델 | 비고 |
 |---|---|---|
-| GPU + VRAM ≥ 9GB | `large-v3` | 5080/4090/3090 등 |
-| GPU + VRAM ≥ 5GB | `medium` | 4060/3060 8GB 등 |
-| GPU + VRAM <  5GB | `small` | 저사양 GPU |
+| CUDA + VRAM ≥ 9GB | `large-v3` | 5080/4090/3090 등 (torch 로 VRAM 측정 가능 시) |
+| CUDA + VRAM ≥ 5GB | `medium` | 4060/3060 8GB 등 |
+| CUDA + VRAM <  5GB | `small` | 저사양 GPU |
+| CUDA 감지됨, VRAM 측정 불가 (torch 미설치) | `medium` | 보수적 기본값. `--model large-v3` 로 강제 가능 |
 | CPU only | `small` | 한국어 실용 최소선 |
 
+GPU 감지 우선순위:
+1. `ctranslate2.get_cuda_device_count()` (faster-whisper 의존성으로 항상 설치됨)
+2. VRAM 측정용 `torch` (선택, 없어도 동작)
+
 사용자가 명시한 `--model` 은 항상 자동 선택보다 우선합니다.
+
+**GPU 인식 안 될 때**:
+- `nvidia-smi` 가 정상 응답하는지 (드라이버 OK?)
+- CUDA Toolkit / cuBLAS / cuDNN 설치 여부 (faster-whisper 가 요구)
+- ctranslate2 가 CUDA 빌드인지 (`pip show ctranslate2` 후 재설치)
 
 CPU 사용자에게 `large-v3` 강요는 비현실적(10시간 방송 → 10~20시간). `small` 도 의미
 파악·하이라이트 스크리닝에는 충분하지만, 자막 burn-in 품질을 끌어올리려면
