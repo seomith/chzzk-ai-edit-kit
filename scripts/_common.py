@@ -19,6 +19,14 @@ import sys
 from pathlib import Path
 
 
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8")
+        except Exception:
+            pass
+
+
 def folder(yymmdd: str) -> Path:
     p = Path(yymmdd)
     if not p.exists():

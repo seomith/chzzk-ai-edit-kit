@@ -8,6 +8,8 @@ vod.mp4
 chat.json
 meta.json
 transcript.json
+transcript.corrected.json
+glossary.suggested.json
 signals.json
 highlights.json
 clips/

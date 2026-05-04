@@ -191,6 +191,12 @@ def main():
     chat_count, laugh = chat_signals(f / "chat.json", duration)
     word_density = transcript_density(f / "transcript.json", duration)
 
+    min_len = min(len(rms), len(chat_count), len(laugh), len(word_density))
+    rms = rms[:min_len]
+    chat_count = chat_count[:min_len]
+    laugh = laugh[:min_len]
+    word_density = word_density[:min_len]
+
     # 정규화 (각 신호의 평균 대비 비율로)
     def norm(a: np.ndarray) -> np.ndarray:
         s = window_sum(a, WINDOW_SEC)

@@ -31,29 +31,53 @@ from _common import folder, resolve_vod_path
 def detect_device_and_model() -> tuple[str, str, str, str]:
     """
     반환: (device, compute_type, recommended_model, info_line)
+
+    1순위: ctranslate2 (faster-whisper 가 어차피 가져오는 의존성) 으로 CUDA 감지
+    2순위(VRAM 측정용): torch — 있으면 정확 측정, 없으면 보수적 기본값
     """
+    cuda_count = 0
     try:
-        import torch
-        if torch.cuda.is_available():
-            try:
-                props = torch.cuda.get_device_properties(0)
-                vram_gb = props.total_memory / (1024 ** 3)
-                name = props.name
-            except Exception:
-                vram_gb = 0
-                name = "Unknown CUDA"
-            if vram_gb >= 9:
-                model = "large-v3"
-            elif vram_gb >= 5:
-                model = "medium"
-            else:
-                model = "small"
-            return ("cuda", "float16", model,
-                    f"CUDA 감지: {name}, VRAM {vram_gb:.1f}GB → 권장 모델 {model}")
+        import ctranslate2  # type: ignore
+        try:
+            cuda_count = ctranslate2.get_cuda_device_count()
+        except Exception:
+            cuda_count = 0
     except Exception:
         pass
-    return ("cpu", "int8", "small",
-            "GPU 미감지 → CPU 모드, 권장 모델 small")
+
+    if cuda_count <= 0:
+        return ("cpu", "int8", "small",
+                "GPU 미감지 (ctranslate2.get_cuda_device_count() == 0) → CPU 모드, 권장 모델 small")
+
+    # CUDA 감지됨. VRAM 측정으로 모델 분기.
+    vram_gb = 0.0
+    name = "CUDA"
+    measured = False
+    try:
+        import torch  # type: ignore
+        if torch.cuda.is_available():
+            props = torch.cuda.get_device_properties(0)
+            vram_gb = props.total_memory / (1024 ** 3)
+            name = props.name
+            measured = True
+    except Exception:
+        pass
+
+    if measured:
+        if vram_gb >= 9:
+            model = "large-v3"
+        elif vram_gb >= 5:
+            model = "medium"
+        else:
+            model = "small"
+        info = f"CUDA 감지: {name}, VRAM {vram_gb:.1f}GB → 권장 모델 {model}"
+    else:
+        # torch 가 없어 VRAM 측정 불가. 보수적으로 medium (대부분 GPU 가 5GB 이상)
+        model = "medium"
+        info = (f"CUDA 감지(ctranslate2): {cuda_count}개 디바이스. "
+                f"VRAM 측정 불가(torch 미설치) → 보수적으로 medium. "
+                f"large-v3 강제: --model large-v3")
+    return ("cuda", "float16", model, info)
 
 
 def transcribe(vod_path: Path, out_path: Path, model_size: str,
