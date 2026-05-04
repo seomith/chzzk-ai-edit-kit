@@ -1,0 +1,91 @@
+{
+  "version": 1,
+  "vod_seconds": 14820,
+  "shorts": [
+    {
+      "id": "s01",
+      "start": 1834.5,
+      "end": 1881.2,
+      "title": "방장 치트키 발동.exe",
+      "tags": ["롤", "한타", "역전", "쇼츠"],
+      "reason": "채팅 ㅋㅋ 폭발 + 음량 피크 동시. 펀치라인 명확.",
+      "score": 92
+    },
+    {
+      "id": "s02",
+      "start": 4321.0,
+      "end": 4378.5,
+      "title": "도네 받고 박장대소",
+      "tags": ["스트리머", "도네", "리액션", "쇼츠"],
+      "reason": "TTS 도네 직후 큰 웃음. 30초로 깔끔.",
+      "score": 88
+    },
+    {
+      "id": "s03",
+      "start": 7820.0,
+      "end": 7872.3,
+      "title": "이게 운빨? 실력?",
+      "tags": ["롤", "솔킬", "쇼츠"],
+      "reason": "채팅 폭발 + 빠른 발화. 펀치라인 마지막에 위치.",
+      "score": 81
+    }
+  ],
+  "longform_chapters": [
+    {
+      "id": "l01",
+      "start": 0,
+      "end": 1820,
+      "title": "오프닝 / 오늘 패치 잡담",
+      "include_in_highlight": false
+    },
+    {
+      "id": "l02",
+      "start": 1820,
+      "end": 3600,
+      "title": "[1판] 솔로랭크 — 미친 캐리",
+      "include_in_highlight": true
+    },
+    {
+      "id": "l03",
+      "start": 3600,
+      "end": 4500,
+      "title": "도네 폭주 + 시청자 채팅",
+      "include_in_highlight": true
+    },
+    {
+      "id": "l04",
+      "start": 4500,
+      "end": 7800,
+      "title": "[2판] 정글 — 초반 부진",
+      "include_in_highlight": false
+    },
+    {
+      "id": "l05",
+      "start": 7800,
+      "end": 11000,
+      "title": "[3판] 미드 — 역대급 솔킬",
+      "include_in_highlight": true
+    },
+    {
+      "id": "l06",
+      "start": 11000,
+      "end": 14820,
+      "title": "마무리 잡담 + 엔딩",
+      "include_in_highlight": false
+    }
+  ],
+  "warnings": [
+    {
+      "start": 4521,
+      "end": 4533,
+      "type": "explicit_language",
+      "note": "도네 사연 중 심한 욕설. 검수 필요."
+    },
+    {
+      "start": 9200,
+      "end": 9260,
+      "type": "copyrighted_bgm",
+      "note": "시청자 신청곡 (원곡 추정) 1분 가량 재생됨."
+    }
+  ]
+}

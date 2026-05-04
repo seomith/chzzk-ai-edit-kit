@@ -1,0 +1,25 @@
+# 스트리머 AI 편집 키트 — Python 의존성
+
+# VOD/채팅 다운로드
+yt-dlp>=2024.10.0
+requests>=2.31.0
+
+# STT
+faster-whisper>=1.0.3
+# CTranslate2 자동 설치됨 (CUDA 12 사용 시 cuBLAS, cuDNN 별도 필요할 수 있음)
+
+# 오디오·신호 분석
+numpy>=1.26
+librosa>=0.10.2
+soundfile>=0.12.1
+
+# 영상 편집
+ffmpeg-python>=0.2.0
+auto-editor>=24.0.0
+
+# 한국어 자연어 처리 (이모티콘/욕설 사전)
+emoji>=2.10
+
+# 유틸
+tqdm>=4.66
+python-dateutil>=2.9

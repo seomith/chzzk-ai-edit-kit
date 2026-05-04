@@ -1,0 +1,42 @@
+# ── 작업 산출물 (방송 회차 폴더) ─────────────────────────────
+# YYMMDD 형식 폴더는 모두 무시 (사용자 방송 데이터)
+# examples/ 하위는 영향 없음 (샘플 유지)
+[0-9][0-9][0-9][0-9][0-9][0-9]/
+
+# 혹시 키트 안에서 직접 작업할 경우의 산출물
+vod.mp4
+chat.json
+meta.json
+transcript.json
+signals.json
+highlights.json
+clips/
+shorts/
+longform/
+*.ass
+edit.edl
+
+# ── Python ────────────────────────────────────────────────
+venv/
+.venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.pytest_cache/
+
+# ── OS / 에디터 ───────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.swp
+*~
+
+# ── 비밀·로컬 설정 ────────────────────────────────────────
+.env
+.env.local
+*.local.json
